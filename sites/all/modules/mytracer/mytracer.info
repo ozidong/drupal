@@ -1,0 +1,13 @@
+name = My Tracer 
+description = My Tracer - 追蹤使用者被閱讀的記錄
+core = 7.x
+package = 我的模組
+
+files[] = mytracer.module
+
+dependencies[] = views
+
+configure = admin/config/people/mytracer 
+
+; Information added by drupal.org packaging script on 2011-09-15
+

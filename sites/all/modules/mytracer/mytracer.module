@@ -1,0 +1,360 @@
+<?php
+
+/**
+ * @file
+ * This is the file description for My Tracer module.
+ *
+ */
+
+/**
+ * Implements hook_help().
+ */
+function mytracer_help($path, $arg) {
+  switch ($path) {
+    case 'admin/config/people/mytracer':
+      return "My Tracer Module helps to record every visit on any user's profile";
+
+    case 'admin/help#mytracer':
+      $output = '';
+      $output .= '<p>' . "My Tracer helps to record every visit on any user's profile.";  
+      $output .= '<p>' . "You can see the top records of who's viewing your profile.";
+      return $output;
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function mytracer_menu() {
+  $items = array();
+
+  $items['admin/config/people/mytracer'] = array(
+    'title' => 'My Tracer',
+    'description' => '追蹤帳號瀏覽 － 基本設定項目.',
+    'access arguments' => array('administer my tracer'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('mytracer_admin_form'), 
+  );
+
+  $items['user/1/mytracer'] = array(
+    'title' => 'My Tracer',
+    'description' => '瀏覽記錄',
+    'access arguments' => array('view mytracer records'),
+    'page callback' => 'mytracer_records',
+    'page arguments' => array(1),  
+      // 因為目前是針對 user 1 而非所有 user, 還不適合作為子頁籤 
+  );
+  
+  
+  // 建立一個管理介面來練習 SQL 的操作 
+  $items['admin/config/people/mytracer2'] = array(
+    'title' => 'SQL 練習', 
+    'description' => 'Practice SQL', 
+    'access callback' => true, 
+    'page callback' => 'mytracer_admin_sql',
+  ); 
+  
+  return $items;
+}
+
+/*
+ * Implements hook_permission 
+ */
+function mytracer_permission() {
+  $items['administer my tracer'] = array(
+    'title' => t('Administer My Tracer'),
+  ); 
+  $items['view mytracer records'] = array(
+    'title' => t('View MyTracer Records'),
+  );
+  return $items;
+}  
+
+/*
+ * SQL 操作練習
+ */
+function mytracer_admin_sql() {
+  
+  // 我們在這裡採用簡單字串方式作輸出 
+  $output = array();
+  
+  //Create a list of headers for your Html table (see Drupal 7 docs for theme_table here
+  $header = array(
+    array('data' => 'Title',    'field' => 'title', 'sort' => 'asc'),
+    array('data' => 'Node ID',  'field' => 'nid'),
+    array('data' => 'Type',     'field' => 'type'),
+    array('data' => 'Created',  'field' => 'created'),
+    array('data' => 'Published'),
+    );
+
+  //Create the Sql query. This uses various parts of Drupal 7's new DBTNG database abstraction layer.
+
+  $query = db_select('node', 'n')
+        ->condition('status', 1)	//Only published nodes, change condition as it suits you
+        ->extend('PagerDefault') 	//Pager Extender
+          ->limit(10)				//10 results per page
+        ->extend('TableSort')		//Sorting Extender
+          ->orderByHeader($header)//Field to sort on is picked from $header
+        ->fields ('n', array (
+          'nid',
+          'title',
+          'type',
+          'created',
+          'status',
+        ));
+
+  $results = $query->execute();
+
+  $rows = array();	
+  foreach ($results as $node) {
+    $rows[] = array(
+          'data' => array(
+              l($node->title, 'node/'. $node->nid .'/edit'),
+              $node->nid,
+              $node->type,
+              format_date($node->created),
+              $node->status
+          )
+    );
+  }
+  
+
+  $output['content'] = array(
+    '#theme' => 'table', 
+    '#caption' => '<h2>' . 'TableSort Extender Sample' . '</h2>',
+    '#header' => $header,
+    '#rows' => $rows, 
+    '#sticky' => true, 
+    '#empty' => 'There is no data.', 
+  ); 
+  
+  $output['pager'] = array(
+    '#theme' => 'pager', 
+    '#weight' => 5, 
+  );
+  
+  return $output; 
+}
+
+
+/*
+ * form 的建立函數
+ */
+function mytracer_admin_form($form, &$form_state) {
+  $form['mytracer_list_max'] = array(
+    '#type' => 'textfield',
+    '#title' => '保留追蹤記錄的筆數', 
+    '#description' => '請輸入 5-20 之間的數值',
+    '#default_value' => variable_get('mytracer_list_max', 5), 
+    '#size' => 20,
+    '#maxlength' => 20,
+    '#required' => TRUE,
+  );
+
+  return system_settings_form($form);
+}
+
+/*
+ * form 的驗証函數
+ */
+function mytracer_admin_form_validate($form, &$form_state) {
+  $list_max = $form_state['values']['mytracer_list_max'];
+
+  if ($list_max < 5 || $list_max > 20) {
+    form_set_error('mytracer_list_max', '保留筆數需介於 5 到 20 之間');
+  }
+}
+
+/* 我們使用 system_settings_form(), 不需要設計 mytracer_admin_form 的提交函數 */   
+
+/*
+ * Implements hook_user_view() 
+ */
+function mytracer_user_view($account, $view_mode, $langcode) {
+  /*
+   *  $account: 被瀏覽的使用者
+   *  global $user: 目前正在操作的使用者 
+   */
+
+  global $user;
+
+  if ($view_mode <> 'full') {
+    return;
+  }
+
+  if ($account->uid <> 1) {
+    return;
+  }
+
+  // 取出放在永久變數中的瀏覽記錄 
+  $visits = variable_get('mytracer_user1_visits', array());
+
+  // 建立本次的瀏覽記錄 
+  $v = array(
+    'uid' => $user->uid,
+    'time' => time(),
+  );
+
+  // 因為 array 後面的資料可能會被砍掉, 因此, 使用 array_unshift(), 將新的記錄放在 array 前面
+  array_unshift($visits, $v);
+
+  // 只保留 'mytracer_list_max' 筆數 
+  $list_max = variable_get('mytracer_list_max', 5);
+  array_splice($visits, $list_max);
+
+  variable_set('mytracer_user1_visits', $visits);
+  
+//  dpm(variable_get('mytracer_user1_visits', 'empty'));
+}
+
+/*
+ * 針對 user 1 (admin), 顯示被瀏覽的記錄
+ */
+function mytracer_records($uid) {
+  $account = user_load($uid); 
+  
+  drupal_set_title(format_string('My Tracer - @username 的被瀏覽記錄', 
+      array('@username' => $account->name))); 
+
+  // 取出 user 1 的瀏覽記錄   
+  $visits = variable_get('mytracer_user1_visits', array());  
+  
+  $header = array(
+    '序', '使用者 ID', '使用者名稱', '時間'
+  ); 
+  
+  $rows = array(); 
+  $i = 1; 
+  
+  foreach($visits as $v) {    
+    $account = user_load($v['uid']);
+    
+    $rows[] = array($i, $v['uid'], $account->name, date('Y-m-d h:m:s', $v['time'])); 
+    
+    $i++; 
+  }
+  
+  // 如果沒有資料, 顯示 '沒有資料' 的訊息
+  if (!count($rows)) {
+    $rows[] = array(  // 列一
+        // 欄一
+        array('data' => '目前沒有瀏覽記錄', 'colspan' => count($header))
+      ); 
+  }
+
+  $output = array(); 
+  
+  $output['visits'] = array(
+	'#theme' => 'table', 
+	'#header' => $header, 
+	'#rows' => $rows,
+  );
+  
+  return $output; 
+}
+
+
+/*
+ * Implements hook_block_info 
+ */
+function mytracer_block_info() {
+  $items = array(); 
+  
+  /*
+   *  裡面的相關屬性，參考 hook_block_info 的 api 文件 
+   * (http://api.drupal.org/api/drupal/modules!block!block.api.php/function/hook_block_info/7) 
+   */
+
+  $items['show_viewd_records'] = array(
+    'info' => 'User 1 追蹤記錄',
+  );  
+  
+  return $items; 
+}
+
+/*
+ * Implements hook_block_configure 
+ * 
+ * $delta: 在此為 Block 的機器名稱
+ */
+function mytracer_block_configure($delta) {
+  if ($delta == 'show_viewd_records') {
+    $form['mytracer_show_records_detailed'] = array(
+      '#type' => 'checkboxes',
+      '#title' => '明細或合計', 
+      '#options' => array('detailed' => '秀出所有追蹤明細'),       
+      '#default_value' => variable_get('mytracer_show_records_detailed', array()), 
+    ); 
+    
+    return $form; 
+  }
+}
+
+/* 
+ * Implements hook_block_save
+ */
+function mytracer_block_save($delta = '', $edit = array()) {
+  
+  if ($delta == 'show_viewd_records') {    
+    variable_set('mytracer_show_records_detailed', $edit['mytracer_show_records_detailed']);
+  }
+}
+
+/*
+ * Implements hook_block_view 
+ */
+function mytracer_block_view($delta = '') {
+  // block 區塊中，有二個重要的輸出元素: subject 與 content 
+  $block = array();
+
+  if ($delta == 'show_viewd_records') {    
+    
+    $block['subject'] = 'Admin 被追蹤記錄'; 
+
+    $visits = variable_get('mytracer_user1_visits', array()); 
+    
+    $detailed = variable_get('mytracer_show_records_detailed', array()); 
+    
+    if ($detailed['detailed']) {
+      // 秀出明細
+      
+      $items = array();
+      
+      foreach ($visits as $v) {
+        $account = user_load($v['uid']); 
+        $items[] = theme('username', array('account' => $account)); 
+      }
+      
+      $block['content'] = theme('item_list', 
+          array('items' => $items, 'type' => 'ul'));
+    }
+    else {
+      // 秀出小計
+      
+      $num = count($visits);
+      
+      $block['content'] = format_string('Admin 被閱讀了 @num 次', array('@num' => $num));
+    }
+  }
+    
+  return $block;   
+}
+
+
+/*
+ * Change content of block: switch_user in module: devel 
+ * 
+ * Implements hook_block_view_MODULE_DELTA_alter() 
+ * 
+ * MODULE: devel
+ * DELTA: switch_user
+ */
+function mytracer_block_view_devel_switch_user_alter(&$data, $block) {
+  // 內容採用 renderable array 方式製作  
+  
+  $data['content']['footer'] = array(
+    '#markup' => '<p>' . l('查看 Admin 被瀏覽記錄', 'user/1/mytracer'), 
+  ); 
+  
+}
+
